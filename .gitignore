@@ -1,4 +1,7 @@
-# labels are written locally at runtime — never commit them
+# secrets — never commit real credentials
+.streamlit/secrets.toml
+
+# labels are written to the Google Sheet (or a local CSV fallback) — not committed
 diagnosis_labels.csv
 *.tmp
 
