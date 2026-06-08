@@ -15,7 +15,6 @@ Run:
 """
 import argparse
 import csv
-import io
 import json
 import sys
 from datetime import datetime
@@ -94,7 +93,6 @@ def code_to_name(entry: dict) -> dict:
     return entry.get("pick_names", {})
 
 
-# ---------------------------------------------------------------- CSV backend
 def read_labels(csv_path: str) -> dict:
     """Return {test_name: row dict}. Read fresh each run so progress is live."""
     p = Path(csv_path)
@@ -121,96 +119,6 @@ def write_label(csv_path: str, row: dict):
     tmp.replace(p)  # atomic
 
 
-# ------------------------------------------------------- Google Sheets backend
-def gsheet_configured() -> bool:
-    try:
-        return ("gcp_service_account" in st.secrets
-                and bool(st.secrets.get("gsheet_url") or st.secrets.get("gsheet_id")))
-    except Exception:
-        return False
-
-
-def _col_letter(n: int) -> str:
-    s = ""
-    while n:
-        n, r = divmod(n - 1, 26)
-        s = chr(65 + r) + s
-    return s
-
-
-@st.cache_resource(show_spinner="Connecting to Google Sheet…")
-def _gsheet():
-    """Authorise via the service account in secrets, return (worksheet, sheet_url)."""
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    info = dict(st.secrets["gcp_service_account"])
-    scopes = ["https://www.googleapis.com/auth/spreadsheets",
-              "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    gc = gspread.authorize(creds)
-
-    ref = st.secrets.get("gsheet_url") or st.secrets.get("gsheet_id")
-    sh = gc.open_by_url(ref) if str(ref).startswith("http") else gc.open_by_key(ref)
-    try:
-        ws = sh.worksheet("labels")
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet("labels", rows=2000, cols=len(CSV_FIELDS))
-    if ws.row_values(1) != CSV_FIELDS:
-        ws.update([CSV_FIELDS], "A1", value_input_option="USER_ENTERED")
-    return ws, sh.url
-
-
-def gsheet_load() -> tuple[dict, dict]:
-    """Return (labels {name: row}, rownum {name: sheet_row})."""
-    ws, _ = _gsheet()
-    labels, rownum = {}, {}
-    for i, r in enumerate(ws.get_all_records(), start=2):  # data starts at row 2
-        name = r.get("test_name")
-        if name:
-            labels[name] = {k: ("" if r.get(k) is None else str(r.get(k)))
-                            for k in CSV_FIELDS}
-            rownum[name] = i
-    return labels, rownum
-
-
-def gsheet_write(rownum: dict, row: dict):
-    """Upsert the row by test_name and sync to the sheet immediately."""
-    ws, _ = _gsheet()
-    values = [row.get(k, "") for k in CSV_FIELDS]
-    name = row["test_name"]
-    if name in rownum:
-        r = rownum[name]
-        rng = f"A{r}:{_col_letter(len(CSV_FIELDS))}{r}"
-        ws.update([values], rng, value_input_option="USER_ENTERED")
-    else:
-        ws.append_row(values, value_input_option="USER_ENTERED",
-                      table_range="A1")
-        rownum[name] = len(rownum) + 2
-
-
-# ------------------------------------------------------- unified dispatch
-def load_labels(args) -> dict:
-    """All saved labels. Google Sheet if configured, else local CSV."""
-    if gsheet_configured():
-        if "gs_cache" not in st.session_state:
-            cache, rownum = gsheet_load()
-            st.session_state.gs_cache = cache
-            st.session_state.gs_rownum = rownum
-        return st.session_state.gs_cache
-    return read_labels(args.csv)
-
-
-def save_label(args, row: dict):
-    """Persist one label immediately (sync after every change)."""
-    if gsheet_configured():
-        gsheet_write(st.session_state.gs_rownum, row)
-        st.session_state.gs_cache[row["test_name"]] = {
-            k: row.get(k, "") for k in CSV_FIELDS}
-    else:
-        write_label(args.csv, row)
-
-
 def main():
     args = parse_args()
     st.set_page_config(page_title="LOINC Labeller", layout="wide")
@@ -228,18 +136,6 @@ def main():
     st.session_state.email = email
     if not email or "@" not in email:
         st.sidebar.warning("Enter your email to start labelling.")
-
-    # storage status + link to the live Google Sheet
-    if gsheet_configured():
-        try:
-            _, sheet_url = _gsheet()
-            st.sidebar.success("Storage: Google Sheet — synced on every save")
-            st.sidebar.markdown(f"[📄 Open Google Sheet]({sheet_url})")
-        except Exception as e:
-            st.sidebar.error(f"Google Sheet error: {e}")
-            st.stop()
-    else:
-        st.sidebar.info("Storage: local CSV (set secrets to use Google Sheet)")
 
     st.sidebar.divider()
 
@@ -264,7 +160,7 @@ def main():
 
     names = [a for a in all_names if keep(a)]
 
-    labels = load_labels(args)                # Google Sheet if configured, else CSV
+    labels = read_labels(args.csv)            # live read from local storage
     done_set = set(labels.keys())
     n_done_view = sum(1 for a in names if a in done_set)
 
@@ -285,14 +181,10 @@ def main():
     st.sidebar.caption(f"Labelled in view: **{n_done_view:,}** · "
                        f"showing **{n:,}** · total saved: **{len(done_set):,}**")
 
-    if labels:
-        buf = io.StringIO()
-        w = csv.DictWriter(buf, fieldnames=CSV_FIELDS)
-        w.writeheader()
-        for r in labels.values():
-            w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
-        st.sidebar.download_button("⬇ Download labels CSV", buf.getvalue().encode("utf-8"),
-                                   file_name="diagnosis_labels.csv", mime="text/csv")
+    if Path(args.csv).exists():
+        st.sidebar.download_button("⬇ Download labels CSV",
+                                   Path(args.csv).read_bytes(),
+                                   file_name=Path(args.csv).name, mime="text/csv")
 
     # ---------------- nav ----------------
     if "idx" not in st.session_state:
@@ -404,7 +296,7 @@ def main():
             "gemini_pick": picks.get("gemini"),
             "timestamp": datetime.now().isoformat(timespec="seconds"),
         }
-        save_label(args, row)                    # synced immediately
+        write_label(args.csv, row)               # persisted immediately
         st.toast(f"Saved “{name}” → {final_code}", icon="✅")
         st.session_state.idx = (idx + 1) % n
         st.session_state.cur_test = None
