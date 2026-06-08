@@ -1,0 +1,9 @@
+# labels are written locally at runtime — never commit them
+diagnosis_labels.csv
+*.tmp
+
+# python
+__pycache__/
+*.pyc
+venv/
+.venv/
