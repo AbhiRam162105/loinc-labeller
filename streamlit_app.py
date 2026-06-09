@@ -211,7 +211,7 @@ def main():
         st.session_state.idx = names.index(sel)
         st.session_state.cur_test = None  # force field reset
 
-    c1, c2, c3 = st.columns([1, 1, 6])
+    c1, c2, c3, c4 = st.columns([1, 1, 2, 4])
     with c1:
         if st.button("◀ Prev", use_container_width=True):
             st.session_state.idx = (st.session_state.idx - 1) % n
@@ -220,6 +220,16 @@ def main():
     with c2:
         if st.button("Skip ▶", use_container_width=True):
             st.session_state.idx = (st.session_state.idx + 1) % n
+            st.session_state.cur_test = None
+            st.rerun()
+    with c3:
+        # editable position: type a number to jump straight to that item
+        pos = st.number_input("Go to #", min_value=1, max_value=n,
+                              value=st.session_state.idx + 1,
+                              key=f"goto_{st.session_state.idx}",
+                              label_visibility="collapsed")
+        if int(pos) - 1 != st.session_state.idx:
+            st.session_state.idx = int(pos) - 1
             st.session_state.cur_test = None
             st.rerun()
 
@@ -241,7 +251,7 @@ def main():
         st.session_state.correct_code = "" if is_ambiguous else prev_code
         st.session_state.correct_label = prev.get("correct_label", "")
 
-    with c3:
+    with c4:
         tag = "✅ already labelled" if name in done_set else "🆕 unlabelled"
         st.markdown(f"**{idx + 1} / {n}** · {tag}")
 
