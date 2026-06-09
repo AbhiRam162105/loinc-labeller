@@ -44,6 +44,8 @@ DEFAULT_JSON = _default_json()
 DEFAULT_CSV = APP_DIR / "diagnosis_labels.csv"
 
 MODELS = ["claude", "gpt", "gemini"]
+# official LOINC term page; opens in a new tab
+LOINC_URL = "https://loinc.org/{}/"
 # written to correct_loinc when the labeller can't pin a single code
 AMBIGUOUS = "ambiguous_multiple"
 AMBIGUOUS_LABEL = ("Not enough information to determine a unique LOINC code "
@@ -136,6 +138,15 @@ def main():
     st.session_state.email = email
     if not email or "@" not in email:
         st.sidebar.warning("Enter your email to start labelling.")
+
+    st.sidebar.divider()
+
+    # open any LOINC record directly on loinc.org
+    nav_code = st.sidebar.text_input("🔎 Open a LOINC code", placeholder="e.g. 8302-2")
+    if nav_code.strip():
+        st.sidebar.link_button(f"Open {nav_code.strip()} on LOINC ↗",
+                               LOINC_URL.format(nav_code.strip()),
+                               use_container_width=True)
 
     st.sidebar.divider()
 
@@ -253,13 +264,15 @@ def main():
                 col.markdown(f"**{mdl}**\n\n`{v}`")
                 if lut.get(v):
                     col.caption(lut[v])
-            # quick-fill button
+            # quick-fill + open the LOINC page for this pick (new tab)
             if not is_none(v):
                 if col.button(f"Use {mdl}'s code", key=f"use_{mdl}",
                               use_container_width=True):
                     st.session_state.correct_code = v
                     st.session_state.correct_label = lut.get(v, "")
                     st.rerun()
+                col.link_button(f"🔗 LOINC {v} ↗", LOINC_URL.format(v),
+                                use_container_width=True)
 
     st.divider()
     st.subheader("✏️ Correct label")
